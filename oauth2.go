@@ -50,7 +50,15 @@ type Config struct {
 
 	// Scope specifies optional requested permissions.
 	Scopes []string
+
+	// BrokenProviderRetrieveTokenHTTPRequest returns the http.Request
+	// to retrieve an access token from a provider that does not follow
+	// the OAuth2 spec. If nil, the request used follows the OAuth2
+	// spec.
+	BrokenProviderRetrieveTokenHTTPRequest retrieveTokenHandler
 }
+
+type retrieveTokenHandler func(*Config, url.Values) (*http.Request, error)
 
 // A TokenSource is anything that can return a token.
 type TokenSource interface {
@@ -299,11 +307,7 @@ func (s *reuseTokenSource) Token() (*Token, error) {
 	return t, nil
 }
 
-func retrieveToken(ctx context.Context, c *Config, v url.Values) (*Token, error) {
-	hc, err := contextClient(ctx)
-	if err != nil {
-		return nil, err
-	}
+func retrieveTokenRequest(c *Config, v url.Values) (*http.Request, error) {
 	v.Set("client_id", c.ClientID)
 	bustedAuth := !providerAuthHeaderWorks(c.Endpoint.TokenURL)
 	if bustedAuth && c.ClientSecret != "" {
@@ -316,6 +320,23 @@ func retrieveToken(ctx context.Context, c *Config, v url.Values) (*Token, error)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if !bustedAuth {
 		req.SetBasicAuth(c.ClientID, c.ClientSecret)
+	}
+	return req, nil
+}
+
+func retrieveToken(ctx context.Context, c *Config, v url.Values) (*Token, error) {
+	hc, err := contextClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var req *http.Request
+	if c.BrokenProviderRetrieveTokenHTTPRequest == nil {
+		req, err = retrieveTokenRequest(c, v)
+	} else {
+		req, err = c.BrokenProviderRetrieveTokenHTTPRequest(c, v)
+	}
+	if err != nil {
+		return nil, err
 	}
 	r, err := hc.Do(req)
 	if err != nil {
